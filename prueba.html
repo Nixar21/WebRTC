@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Videollamada</title>
+    <style type="text/css">
+        body {
+            margin: 0;
+            font-size: 20px;
+        }
+        .video-position {
+            position: absolute;
+            top: 35%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #local-video {
+            position: absolute;
+            height: 30%;
+            width: 30%;
+            bottom: 0px;
+            left: 0px;
+        }
+        #remote-video {
+            height: 100%;
+            width: 100%;
+        }
+    </style>
+    <script type="text/javascript">
+    // --- Variables globales ---
+    let localVideoComponent;
+    let remoteVideoComponent;
+    let localStream;
+    let pc; // RTCPeerConnection
+    let ws; // WebSocket para señalización
+
+    // Configuración de medios y STUN
+    const mediaConstraints = { audio: true, video: true };
+    const iceServers = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' }
+        ]
+    };
+
+    // --- Inicialización de la videollamada ---
+    async function showVideoConference() {
+        localVideoComponent = document.getElementById('local-video');
+        remoteVideoComponent = document.getElementById('remote-video');
+
+        // 1. Obtener stream local
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+            localVideoComponent.srcObject = localStream;
+        } catch (err) {
+            alert("No se pudo acceder a la cámara/micrófono.");
+            return;
+        }
+
+        // 2. Conectar al servidor de señalización
+        ws = new WebSocket('ws://localhost:3000'); // Cambia el puerto si tu servidor usa otro
+
+        ws.onopen = () => {
+            console.log("Conectado al servidor de señalización");
+            // Avisar que estamos listos
+            ws.send(JSON.stringify({ type: "join" }));
+        };
+
+        ws.onmessage = async (message) => {
+            const data = JSON.parse(message.data);
+            switch (data.type) {
+                case "offer":
+                    await handleOffer(data.offer);
+                    break;
+                case "answer":
+                    await handleAnswer(data.answer);
+                    break;
+                case "candidate":
+                    if (pc) await pc.addIceCandidate(data.candidate);
+                    break;
+            }
+        };
+
+        // 3. Crear RTCPeerConnection y agregar stream local
+        pc = new RTCPeerConnection(iceServers);
+
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+        // 4. Cuando recibimos el stream remoto, mostrarlo
+        pc.ontrack = (event) => {
+            remoteVideoComponent.srcObject = event.streams[0];
+        };
+
+        // 5. Enviar candidatos ICE al otro par
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                ws.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+            }
+        };
+
+        // 6. Botón para iniciar la llamada (solo uno debe presionar)
+        document.getElementById('call-btn').onclick = async () => {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: "offer", offer }));
+        };
+    }
+
+    // --- Funciones para manejar señalización ---
+    async function handleOffer(offer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "answer", answer }));
+    }
+
+    async function handleAnswer(answer) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    }
+    </script>
+</head>
+<body onload="showVideoConference()">
+    <div id="video-chat-container" class="video-position" style="display: block">
+        <video id="local-video" autoplay playsinline></video>
+        <video id="remote-video" autoplay playsinline></video>
+        <button id="call-btn" style="position:absolute;top:10px;left:10px;">Iniciar llamada</button>
+    </div>
+</body>
+</html>
+
+
